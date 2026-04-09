@@ -8,7 +8,7 @@ People involved:
 - Prof. Lucas Mello Schnorr ([[https://github.com/schnorr][@schnorr]])
 - Rayan Raddatz de Matos ([[https://github.com/rddtz][@rddtz]])
 - Kenichi Brumati ([[https://github.com/Kenichi220][@Kenichi220]])
-- (put your name here)
+- Enzo Peixoto ([[https://github.com/enzolisp][@enzolisp]])
 
 If you want to get yourself involved, get in touch. ;-)
 
