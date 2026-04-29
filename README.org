@@ -14,3 +14,134 @@ People involved:
 - (put your name here)
 
 If you want to get yourself involved, get in touch. ;-)
+
+** Architecture
+
+The system follows a client–server model inspired by =fractal_pcad=:
+
+- *Coordinator* (=coordinator=): an MPI program where *all ranks* participate
+  equally in the gravitational computation.  Rank 0 also manages TCP
+  connections and dispatches work; ranks 1..N−1 are pure workers.
+  After every iteration each rank performs an =MPI_Allgatherv= on
+  =MPI_COMM_WORLD= to share updated particle positions, keeping every rank
+  in sync for the next iteration.
+
+- *Clients* (=grafica=, =textual=): connect to the coordinator, send a
+  =payload_t= describing the simulation (particle count, iterations, spatial
+  domain), and receive back a stream of =response_t= messages — one per rank
+  per iteration — each carrying the updated positions of that rank's particle
+  slice.
+
+The coordinator survives client disconnections and continues listening for
+new clients.  A new simulation can begin as soon as the next client connects.
+
+** Building
+
+To build the project, ensure you have MPI and [[https://github.com/raysan5/raylib][Raylib]] installed.
+You can adjust the Raylib installation path in the =Makefile=.
+
+Then, simply run:
+
+#+begin_src shell
+make
+#+end_src
+
+This will create three executables inside the =bin/= directory:
+- =grafica= (GUI client, requires Raylib)
+- =textual= (command-line batch client, useful for benchmarking)
+- =coordinator= (parallel MPI server)
+
+Individual targets are also available:
+
+#+begin_src shell
+make coordinator
+make textual
+make grafica
+#+end_src
+
+*** Log level
+
+Timing logs are available for the =textual= client and the =coordinator=.
+The default build uses =LOG_FULL= logging.
+Override at compile time with the =LOG_LEVEL= variable:
+
+#+begin_src shell
+make LOG_LEVEL=LOG_NONE
+#+end_src
+
+Available options:
+- =LOG_NONE=  – no logging output
+- =LOG_BASIC= – coordinator timing logs and per-worker timing logs per request
+- =LOG_FULL=  – everything in =LOG_BASIC= plus per-iteration timing for each worker
+
+Log files are written to:
+- =coordinator_log.txt= (rank 0)
+- =worker_logs/worker_<rank>.txt= (ranks 1..N−1)
+
+** Running
+
+*** Coordinator (server)
+
+The coordinator must be launched with =mpirun=.
+Specify at least 2 processes (rank 0 = coordinator/worker, ranks 1..N−1 = workers).
+*All ranks compute*, so =mpirun -n 4= gives 4 equal participants.
+
+#+begin_src shell
+mpirun -n 4 ./bin/coordinator <port>
+#+end_src
+
+The coordinator listens on =<port>= and serves one client at a time.
+After a client disconnects it immediately waits for the next one.
+
+*** Textual client
+
+Batch client for benchmarking or scripted runs.  Connects, sends one
+simulation request, prints every response, then disconnects.
+
+#+begin_src shell
+./bin/textual <host> <port> <num_particles> <num_iterations> <space_size> [<seed>]
+#+end_src
+
+| Argument          | Description                                                       |
+|-------------------+-------------------------------------------------------------------|
+| =<host>=          | Hostname or IP address of the coordinator                         |
+| =<port>=          | TCP port the coordinator is listening on                          |
+| =<num_particles>= | Number of bodies to simulate (clamped to valid range)             |
+| =<num_iterations>=| Number of time-steps to compute                                   |
+| =<space_size>=    | Side length of the 2-D spatial domain in metres (e.g. =1e12=)    |
+| =<seed>=          | Optional random seed for particle placement (default: 42)         |
+
+Example — 12 particles, 5 iterations, 1 trillion-metre domain, 6 MPI ranks:
+
+#+begin_src shell
+mpirun -n 6 ./bin/coordinator 8080 &
+./bin/textual localhost 8080 12 5 1e12
+#+end_src
+
+Expected output: =6 ranks × 5 iterations = 30 responses=, one line each.
+
+*** Graphical client
+
+Interactive GUI built with Raylib.  Renders particle positions in real time
+as responses arrive.
+
+#+begin_src shell
+./bin/grafica <host> <port>
+#+end_src
+
+** Interacting with the simulation (GUI client)
+
+| Key   | Action                                              |
+|-------+-----------------------------------------------------|
+| =N=   | Start a new simulation with the current settings    |
+| =P += | Increase particle count                             |
+| =P -= | Decrease particle count                             |
+| =I += | Increase iteration count                            |
+| =I -= | Decrease iteration count                            |
+| =S += | Increase space scale (zoom out — more km per pixel) |
+| =S -= | Decrease space scale (zoom in — fewer km per pixel) |
+| =ESC= | Quit                                                |
+
+The HUD in the top-left corner shows the current settings (particle count,
+iterations, space scale, and number of available workers).
+
