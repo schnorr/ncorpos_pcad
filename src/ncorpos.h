@@ -22,20 +22,36 @@ along with "NCorpos @ PCAD". If not, see
 #include <stdlib.h>
 #include <stdbool.h>
 
-/* ---------------------------------------------------------------
- * Physical / simulation constants (defaults; can be overridden)
- * --------------------------------------------------------------- */
-#define NCORPOS_G          6.674e-11  /* gravitational constant (SI) */
-#define NCORPOS_DT         1.0e1      /* time step in seconds        */
-#define NCORPOS_SOFTENING  1.0e8      /* softening length (m)        */
+/* -------------------------------------------------------------------
+ * Physical / simulation constants — GALACTIC SCALE
+ * 1 kpc  = 3.086e19 m
+ * 1 Myr  = 3.156e13 s
+ * 1 Msun = 1.989e30 kg
+ * ------------------------------------------------------------------- */
+#define NCORPOS_G           6.674e-11   /* gravitational constant (SI)      */
+#define NCORPOS_DT          0.00031    /* time step: ~1 Myr in seconds     */
+#define NCORPOS_SOFTENING   3.086e18    /* softening: ~100 pc in metres     */
 
-/* Acceptable bounds for client parameters */
-#define NCORPOS_MIN_PARTICLES  2
-#define NCORPOS_MAX_PARTICLES  10000
-#define NCORPOS_MIN_MASS       1.0e20   /* kg */
-#define NCORPOS_MAX_MASS       2.0e30   /* kg (≈1 solar mass)         */
-#define NCORPOS_MIN_SPEED     -1.0e3   /* m/s */
-#define NCORPOS_MAX_SPEED      1.0e3   /* m/s */
+/* Bounds used by the galaxy IC generator */
+#define NCORPOS_MIN_PARTICLES   2
+#define NCORPOS_MAX_PARTICLES   10000
+
+/* Stellar particle mass range (solar masses in kg) */
+#define NCORPOS_MIN_MASS    1.0e29      /* ~0.05 Msun                       */
+#define NCORPOS_MAX_MASS    4.0e30      /* ~2 Msun                          */
+
+/* Galactic velocity bounds */
+#define NCORPOS_MIN_SPEED  -5.0e5      /* m/s  (-500 km/s)                  */
+#define NCORPOS_MAX_SPEED   5.0e5      /* m/s  (+500 km/s)                  */
+
+/* Galaxy structural parameters (SI) */
+#define GALAXY_HALO_MASS    1.989e42   /* 1e12 Msun — dark matter halo      */
+#define GALAXY_HALO_SCALE   1.080e20   /* 3.5 kpc   — Hernquist scale rad.  */
+#define GALAXY_DISK_SCALE   9.257e19   /* 3.0 kpc   — exponential disk h    */
+#define GALAXY_BULGE_MASS   1.989e40   /* 1e10 Msun — bulge total mass      */
+#define GALAXY_BULGE_SCALE  1.543e19   /* 0.5 kpc   — bulge scale radius    */
+#define GALAXY_BH_MASS      7.958e36   /* 4e6 Msun  — central black hole    */
+#define GALAXY_RADIUS       6.172e20   /* 20 kpc    — truncation radius     */
 
 /* ---------------------------------------------------------------
  * Core data types
@@ -46,6 +62,7 @@ typedef struct {
   int    id;      /* unique integer identifier                     */
   double x, y;   /* position  (metres)                            */
   double vx, vy; /* velocity  (m/s)                               */
+  double ax, ay; /* acceleration from previous step (Leapfrog)    */
   double mass;   /* mass      (kg)                                */
 } particle_t;
 

@@ -43,6 +43,7 @@ Thread model (mirrors fractal textual.c):
 #include <math.h>
 
 #include "ncorpos.h"
+#include "galaxy_ic.h"
 #include "connection.h"
 #include "queue.h"
 #include "timing.h"
@@ -190,9 +191,7 @@ static payload_t *build_payload(int argc, char *argv[], int num_workers)
   if (num_iterations <= 0)
     num_iterations = 1;
   if (space_size <= 0.0)
-    space_size = 1.0e12; /* 1 trillion metres by default */
-
-  srand48(seed);
+    space_size = GALAXY_RADIUS * 2.0; /* ~40 kpc diameter */
 
   payload_t *p = calloc(1, sizeof(payload_t));
   if (!p) { perror("calloc"); exit(1); }
@@ -209,17 +208,7 @@ static payload_t *build_payload(int argc, char *argv[], int num_workers)
   p->particles = malloc((size_t)num_particles * sizeof(particle_t));
   if (!p->particles) { perror("malloc"); exit(1); }
 
-  for (int i = 0; i < num_particles; i++) {
-    p->particles[i].id   = i;
-    p->particles[i].x    = drand48() * space_size;
-    p->particles[i].y    = drand48() * space_size;
-    p->particles[i].vx   = (drand48() * 2.0 - 1.0) *
-                           (NCORPOS_MAX_SPEED - NCORPOS_MIN_SPEED) / 2.0;
-    p->particles[i].vy   = (drand48() * 2.0 - 1.0) *
-                           (NCORPOS_MAX_SPEED - NCORPOS_MIN_SPEED) / 2.0;
-    p->particles[i].mass = NCORPOS_MIN_MASS +
-                           drand48() * (NCORPOS_MAX_MASS - NCORPOS_MIN_MASS);
-  }
+  generate_galaxy_ic(p->particles, num_particles, seed);
 
   return p;
 }

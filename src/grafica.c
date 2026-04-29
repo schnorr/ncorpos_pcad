@@ -40,6 +40,7 @@ Controls:
 #include <time.h>
 
 #include "ncorpos.h"
+#include "galaxy_ic.h"
 #include "connection.h"
 #include "queue.h"
 
@@ -60,13 +61,14 @@ static queue_t response_queue = {0};
 static pthread_mutex_t g_particles_mutex = PTHREAD_MUTEX_INITIALIZER;
 static Vector2 *g_screen_positions = NULL; /* [max_particles] */
 static int     *g_particle_ids      = NULL; /* [max_particles] */
+static double  *g_particle_masses   = NULL; /* [max_particles] */
 static int      g_num_particles     = 0;
 static bool     g_particles_changed = false;
 
 /* Simulation settings (modified only from main/UI thread) */
-static int    g_num_particles_setting = 100;
-static int    g_num_iterations        = 50;
-static double g_space_size            = 1.0e13; /* metres per axis */
+static int    g_num_particles_setting = 2500;
+static int    g_num_iterations        = 500;
+static double g_space_size            = GALAXY_RADIUS * 2.0; /* ~40 kpc diameter */
 static int    g_max_workers           = 1;
 static float  g_show_settings_timer  = 0.0f;
 
@@ -78,9 +80,27 @@ static Vector2 space_to_screen(double x, double y,
                                 int    screen_w, int    screen_h)
 {
   return (Vector2){
-    .x = (float)(x / space_w * screen_w),
-    .y = (float)(y / space_h * screen_h)
+    .x = (float)((x / space_w + 0.5) * screen_w),
+    .y = (float)((y / space_h + 0.5) * screen_h)
   };
+}
+
+/* ---------------------------------------------------------------
+ * Particle display radius — proportional to mass on a log scale.
+ *
+ * The BH (id == 0) gets a fixed prominent radius (6 px).
+ * All other particles are mapped from log10(mass) to [1.0, 4.0] px
+ * using a reference range of [1e37, 1e42] kg, which covers the
+ * full range of per-particle masses for any reasonable N.
+ * --------------------------------------------------------------- */
+static float particle_radius(double mass, int id)
+{
+  if (id == 0)
+    return 6.0f; /* central black hole — always prominent */
+  double t = (log10(mass) - 37.0) / (42.0 - 37.0);
+  if (t < 0.0) t = 0.0;
+  if (t > 1.0) t = 1.0;
+  return (float)(1.0 + t * 3.0); /* [1.0, 4.0] px */
 }
 
 /* ---------------------------------------------------------------
@@ -119,7 +139,9 @@ static void *render_thread_function(void *arg)
                                    (size_t)total * sizeof(Vector2));
       g_particle_ids     = realloc(g_particle_ids,
                                    (size_t)total * sizeof(int));
-      if (!g_screen_positions || !g_particle_ids) {
+      g_particle_masses  = realloc(g_particle_masses,
+                                   (size_t)total * sizeof(double));
+      if (!g_screen_positions || !g_particle_ids || !g_particle_masses) {
         perror("realloc failed");
         pthread_mutex_unlock(&g_particles_mutex);
         free_response(r);
@@ -139,7 +161,8 @@ static void *render_thread_function(void *arg)
         space_to_screen(pt->x, pt->y,
                         g_space_size, g_space_size,
                         screen_w, screen_h);
-      g_particle_ids[idx] = pt->id;
+      g_particle_ids[idx]    = pt->id;
+      g_particle_masses[idx] = pt->mass;
     }
     g_particles_changed = true;
     pthread_mutex_unlock(&g_particles_mutex);
@@ -220,12 +243,10 @@ static void *net_thread_receive_response(void *arg)
 }
 
 /* ---------------------------------------------------------------
- * build_payload  –  create a random particle set for simulation
+ * build_payload  –  create a galaxy initial condition for simulation
  * --------------------------------------------------------------- */
 static payload_t *build_payload(int screen_width, int screen_height)
 {
-  srand48((long)time(NULL));
-
   payload_t *p = calloc(1, sizeof(payload_t));
   if (!p) { perror("calloc"); exit(1); }
 
@@ -242,17 +263,8 @@ static payload_t *build_payload(int screen_width, int screen_height)
   p->particles = malloc((size_t)p->num_particles * sizeof(particle_t));
   if (!p->particles) { perror("malloc"); exit(1); }
 
-  for (int i = 0; i < p->num_particles; i++) {
-    p->particles[i].id   = i;
-    p->particles[i].x    = drand48() * g_space_size;
-    p->particles[i].y    = drand48() * g_space_size;
-    p->particles[i].vx   = (drand48() * 2.0 - 1.0) *
-                           (NCORPOS_MAX_SPEED - NCORPOS_MIN_SPEED) / 2.0;
-    p->particles[i].vy   = (drand48() * 2.0 - 1.0) *
-                           (NCORPOS_MAX_SPEED - NCORPOS_MIN_SPEED) / 2.0;
-    p->particles[i].mass = NCORPOS_MIN_MASS +
-                           drand48() * (NCORPOS_MAX_MASS - NCORPOS_MIN_MASS);
-  }
+  generate_galaxy_ic(p->particles, p->num_particles, (long)time(NULL));
+
   return p;
 }
 
@@ -301,7 +313,7 @@ static void handle_input(int screen_width, int screen_height)
   if (IsKeyDown(KEY_S)) {
     double factor = IsKeyDown(KEY_EQUAL) ? 1.0 + (double)dt
                                          : 1.0 - (double)dt;
-    g_space_size = CLAMP(g_space_size * factor, 1.0e9, 1.0e20);
+    g_space_size = CLAMP(g_space_size * factor, 1.0e15, 1.0e22);
     g_show_settings_timer = 2.0f;
   }
 
@@ -364,10 +376,17 @@ int main(int argc, char *argv[])
     pthread_mutex_lock(&g_particles_mutex);
     if (g_particles_changed) {
       for (int i = 0; i < g_num_particles; i++) {
-        /* Colour by particle id */
-        unsigned char hue = (unsigned char)((g_particle_ids[i] * 37) & 0xFF);
-        Color c = ColorFromHSV((float)hue / 255.0f * 360.0f, 0.9f, 0.9f);
-        DrawCircleV(g_screen_positions[i], 3.0f, c);
+        int    pid  = g_particle_ids[i];
+        double mass = g_particle_masses[i];
+        float  rad  = particle_radius(mass, pid);
+        Color  c;
+        if (pid == 0) {
+          c = WHITE; /* central black hole */
+        } else {
+          unsigned char hue = (unsigned char)((pid * 37) & 0xFF);
+          c = ColorFromHSV((float)hue / 255.0f * 360.0f, 0.9f, 0.9f);
+        }
+        DrawCircleV(g_screen_positions[i], rad, c);
       }
     }
     pthread_mutex_unlock(&g_particles_mutex);
@@ -403,6 +422,7 @@ int main(int argc, char *argv[])
 
   free(g_screen_positions);
   free(g_particle_ids);
+  free(g_particle_masses);
   pthread_mutex_destroy(&g_particles_mutex);
 
   close(connection);

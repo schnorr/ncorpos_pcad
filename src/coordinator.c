@@ -184,7 +184,6 @@ static void *net_thread_receive_payload(void *arg)
   while (!atomic_load(&shutdown_requested)) {
     payload_t *p = calloc(1, sizeof(payload_t));
     if (!p) { fprintf(stderr, "calloc failed\n"); pthread_exit(NULL); }
-
     if (recv_all(connection, p, sizeof(payload_t), 0) <= 0) {
       free(p);
       handle_client_disconnect(connection);
@@ -196,7 +195,6 @@ static void *net_thread_receive_payload(void *arg)
       request_shutdown(connection);
       break;
     }
-
     p->particles = malloc((size_t)p->num_particles * sizeof(particle_t));
     if (!p->particles) { fprintf(stderr, "malloc failed\n"); pthread_exit(NULL); }
 

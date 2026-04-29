@@ -103,11 +103,15 @@ subpayload_t **discretize_payload(payload_t *payload,
 }
 
 /* ---------------------------------------------------------------
- * ncorpos_step  –  O(N²) Newton gravity, one time step
+ * ncorpos_step  –  O(N²) Newton gravity, Kick-Drift-Kick Leapfrog
+ *
+ * The central black hole (id == 0) is kept fixed at the origin to
+ * anchor the galactic potential and prevent the galaxy from
+ * random-walking off-screen due to asymmetric N-body forces.
  *
  * Updates velocity and position for particles in the range
  * [sub->first_particle, sub->last_particle).
- * All particles are read to compute gravitational forces.
+ * All particles are read for the gravitational force computation.
  * --------------------------------------------------------------- */
 void ncorpos_step(subpayload_t *sub, double dt, double softening)
 {
@@ -117,29 +121,46 @@ void ncorpos_step(subpayload_t *sub, double dt, double softening)
 
   particle_t *particles = sub->payload.particles;
   int         N         = sub->payload.num_particles;
+  double      half_dt   = dt * 0.5;
 
+  /* Step 1: half-kick with stored (old) accelerations */
   for (int i = sub->first_particle; i < sub->last_particle; i++) {
+    if (particles[i].id == 0) continue; /* BH stays fixed at origin */
+    particles[i].vx += particles[i].ax * half_dt;
+    particles[i].vy += particles[i].ay * half_dt;
+  }
+
+  /* Step 2: drift */
+  for (int i = sub->first_particle; i < sub->last_particle; i++) {
+    if (particles[i].id == 0) continue; /* BH stays fixed at origin */
+    particles[i].x += particles[i].vx * dt;
+    particles[i].y += particles[i].vy * dt;
+  }
+
+  /* Steps 3+4+5: recompute accelerations, second half-kick, store */
+  for (int i = sub->first_particle; i < sub->last_particle; i++) {
+    if (particles[i].id == 0) continue; /* BH stays fixed at origin */
     double ax = 0.0, ay = 0.0;
 
     for (int j = 0; j < N; j++) {
       if (j == i) continue;
 
-      double dx   = particles[j].x - particles[i].x;
-      double dy   = particles[j].y - particles[i].y;
+      double dx    = particles[j].x - particles[i].x;
+      double dy    = particles[j].y - particles[i].y;
       double dist2 = dx * dx + dy * dy + softening * softening;
       double dist  = sqrt(dist2);
-      double force = NCORPOS_G * particles[j].mass / dist2; /* F/mi = G*mj/r² */
+      double force = NCORPOS_G * particles[j].mass / dist2;
 
       ax += force * dx / dist;
       ay += force * dy / dist;
     }
 
-    /* Symplectic Euler: update velocity first, then position */
-    particles[i].vx += ax * dt;
-    particles[i].vy += ay * dt;
-    particles[i].x  += particles[i].vx * dt;
-    particles[i].y  += particles[i].vy * dt;
-    /* mass is constant per the problem specification */
+    /* Step 4: second half-kick */
+    particles[i].vx += ax * half_dt;
+    particles[i].vy += ay * half_dt;
+    /* Step 5: store for next step */
+    particles[i].ax = ax;
+    particles[i].ay = ay;
   }
 }
 
