@@ -9,6 +9,7 @@ People involved:
 - Rayan Raddatz de Matos ([[https://github.com/rddtz][@rddtz]])
 - Kenichi Brumati ([[https://github.com/kenichi220][@kenichi220]])
 - Enzo Peixoto ([[https://github.com/enzolisp][@enzolisp]])
+- Francisco Pegoraro Etcheverria ([[https://github.com/thedoubleace][@thedoubleace]])
 - (put your name here)
 
 If you want to get yourself involved, get in touch. ;-)
