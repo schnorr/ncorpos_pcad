@@ -10,6 +10,7 @@ People involved:
 - Kenichi Brumati ([[https://github.com/kenichi220][@kenichi220]])
 - Enzo Peixoto ([[https://github.com/enzolisp][@enzolisp]])
 - Francisco Pegoraro Etcheverria ([[https://github.com/thedoubleace][@thedoubleace]])
+- Pedro Colle ([[https://github.com/sacolle][@sacolle]])
 - (put your name here)
 
 If you want to get yourself involved, get in touch. ;-)
