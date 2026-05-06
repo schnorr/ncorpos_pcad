@@ -138,10 +138,12 @@ as responses arrive.
 | =P -= | Decrease particle count                             |
 | =I += | Increase iteration count                            |
 | =I -= | Decrease iteration count                            |
-| =S += | Increase space scale (zoom out — more km per pixel) |
-| =S -= | Decrease space scale (zoom in — fewer km per pixel) |
+| =S += | Increase zoom                                       |
+| =S -= | Decrease zoom                                       |
 | =ESC= | Quit                                                |
+
+The mouse can also be used to interact with the simulation. Click and drag moves
+the camera, and the scroll wheel zooms in/out.
 
 The HUD in the top-left corner shows the current settings (particle count,
 iterations, space scale, and number of available workers).
-

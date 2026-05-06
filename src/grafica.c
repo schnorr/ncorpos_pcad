@@ -59,50 +59,52 @@ static queue_t response_queue = {0};
 
 /* Current particle positions on screen (updated by render_thread) */
 static pthread_mutex_t g_particles_mutex = PTHREAD_MUTEX_INITIALIZER;
-static Vector2 *g_screen_positions = NULL; /* [max_particles] */
+static Vector2 *g_particle_positions = NULL; /* [max_particles] */
 static int     *g_particle_ids      = NULL; /* [max_particles] */
 static double  *g_particle_masses   = NULL; /* [max_particles] */
 static int      g_num_particles     = 0;
-static bool     g_particles_changed = false;
+static Camera2D g_camera = {0};
 
 /* Simulation settings (modified only from main/UI thread) */
 static int    g_num_particles_setting = 2500;
 static int    g_num_iterations        = 500;
-static double g_space_size            = GALAXY_RADIUS * 2.0; /* ~40 kpc diameter */
 static int    g_max_workers           = 1;
 static float  g_show_settings_timer  = 0.0f;
 
 /* ---------------------------------------------------------------
- * Space ↔ screen coordinate mapping
+ * Particle display radius — proportional to mass on a log scale.
+ *
+ * The BH (id == 0) gets a fixed prominent radius.
+ * All other particles are mapped from log10(mass) to a radius range
+ * using a reference mass range of [1e37, 1e42] kg, which covers the
+ * full range of per-particle masses for any reasonable N.
  * --------------------------------------------------------------- */
-static Vector2 space_to_screen(double x, double y,
-                                double space_w, double space_h,
-                                int    screen_w, int    screen_h)
+static double particle_radius(double mass, int id)
 {
-  return (Vector2){
-    .x = (float)((x / space_w + 0.5) * screen_w),
-    .y = (float)((y / space_h + 0.5) * screen_h)
-  };
+    if (id == 0)
+      return BLACK_HOLE_RADIUS; /* central black hole — always prominent */
+
+    double t = (log10(mass) - 37.0) / (42.0 - 37.0);
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+
+    return PARTICLE_RADIUS_MIN + t * (PARTICLE_RADIUS_MAX - PARTICLE_RADIUS_MIN);
 }
 
 /* ---------------------------------------------------------------
- * Particle display radius — proportional to mass on a log scale.
- *
- * The BH (id == 0) gets a fixed prominent radius (6 px).
- * All other particles are mapped from log10(mass) to [1.0, 4.0] px
- * using a reference range of [1e37, 1e42] kg, which covers the
- * full range of per-particle masses for any reasonable N.
+ * Particle color — proportional to mass on a log scale.
+ * 
+ * The black hole gets a fixed white color. Other particles are colored
+ * based on id.
  * --------------------------------------------------------------- */
-static float particle_radius(double mass, int id)
+static Color particle_color(int id)
 {
-  if (id == 0)
-    return 6.0f; /* central black hole — always prominent */
-  double t = (log10(mass) - 37.0) / (42.0 - 37.0);
-  if (t < 0.0) t = 0.0;
-  if (t > 1.0) t = 1.0;
-  return (float)(1.0 + t * 3.0); /* [1.0, 4.0] px */
-}
+    if (id == 0)
+      return WHITE; /* big central BH */
 
+    unsigned char hue = (unsigned char)((id * 37) & 0xFF);
+    return ColorFromHSV((float)hue / 255.0f * 360.0f, 0.9f, 0.9f);
+}
 /* ---------------------------------------------------------------
  * Shutdown helper
  * --------------------------------------------------------------- */
@@ -125,6 +127,7 @@ static void request_shutdown(int connection)
 static void *render_thread_function(void *arg)
 {
   (void)arg;
+  static int current_rendered_generation = -1;
 
   while (!atomic_load(&shutdown_requested)) {
     response_t *r = (response_t *)queue_dequeue(&response_queue);
@@ -132,16 +135,23 @@ static void *render_thread_function(void *arg)
 
     pthread_mutex_lock(&g_particles_mutex);
 
+    /* Avoid stale particles */
+    if (r->generation > current_rendered_generation) {
+      current_rendered_generation = r->generation;
+      g_num_particles = 0;
+    }
+
     /* Resize position buffer if needed */
     int total = r->first_particle + r->num_particles_slice;
     if (total > g_num_particles) {
-      g_screen_positions = realloc(g_screen_positions,
+      g_particle_positions = realloc(g_particle_positions,
                                    (size_t)total * sizeof(Vector2));
       g_particle_ids     = realloc(g_particle_ids,
                                    (size_t)total * sizeof(int));
       g_particle_masses  = realloc(g_particle_masses,
                                    (size_t)total * sizeof(double));
-      if (!g_screen_positions || !g_particle_ids || !g_particle_masses) {
+
+      if (!g_particle_positions || !g_particle_ids || !g_particle_masses) {
         perror("realloc failed");
         pthread_mutex_unlock(&g_particles_mutex);
         free_response(r);
@@ -150,21 +160,15 @@ static void *render_thread_function(void *arg)
       g_num_particles = total;
     }
 
-    int screen_w = GetScreenWidth();
-    int screen_h = GetScreenHeight();
-
     for (int i = 0; i < r->num_particles_slice; i++) {
       int idx = r->first_particle + i;
       particle_t *pt = &r->particles[i];
 
-      g_screen_positions[idx] =
-        space_to_screen(pt->x, pt->y,
-                        g_space_size, g_space_size,
-                        screen_w, screen_h);
+      g_particle_positions[idx] =
+        (Vector2){.x = pt->x, .y = pt->y};
       g_particle_ids[idx]    = pt->id;
       g_particle_masses[idx] = pt->mass;
     }
-    g_particles_changed = true;
     pthread_mutex_unlock(&g_particles_mutex);
 
     free_response(r);
@@ -245,7 +249,7 @@ static void *net_thread_receive_response(void *arg)
 /* ---------------------------------------------------------------
  * build_payload  –  create a galaxy initial condition for simulation
  * --------------------------------------------------------------- */
-static payload_t *build_payload(int screen_width, int screen_height)
+static payload_t *build_payload()
 {
   payload_t *p = calloc(1, sizeof(payload_t));
   if (!p) { perror("calloc"); exit(1); }
@@ -255,10 +259,6 @@ static payload_t *build_payload(int screen_width, int screen_height)
   p->num_particles = g_num_particles_setting;
   p->num_iterations= g_num_iterations;
   p->num_workers   = g_max_workers;
-  p->space_width   = g_space_size;
-  p->space_height  = g_space_size;
-  p->screen_width  = screen_width;
-  p->screen_height = screen_height;
 
   p->particles = malloc((size_t)p->num_particles * sizeof(particle_t));
   if (!p->particles) { perror("malloc"); exit(1); }
@@ -271,13 +271,13 @@ static payload_t *build_payload(int screen_width, int screen_height)
 /* ---------------------------------------------------------------
  * handle_input  –  process keyboard input and dispatch payloads
  * --------------------------------------------------------------- */
-static void handle_input(int screen_width, int screen_height)
+static void handle_input()
 {
   float dt = GetFrameTime();
 
   /* N – send a new simulation request */
   if (IsKeyPressed(KEY_N)) {
-    payload_t *p = build_payload(screen_width, screen_height);
+    payload_t *p = build_payload();
     payload_print(__func__, "Enqueueing payload", p);
     queue_enqueue(&payload_queue, p);
     p = NULL;
@@ -313,12 +313,33 @@ static void handle_input(int screen_width, int screen_height)
   if (IsKeyDown(KEY_S)) {
     double factor = IsKeyDown(KEY_EQUAL) ? 1.0 + (double)dt
                                          : 1.0 - (double)dt;
-    g_space_size = CLAMP(g_space_size * factor, 1.0e15, 1.0e22);
+    g_camera.zoom = (float)((double)g_camera.zoom * factor);
     g_show_settings_timer = 2.0f;
   }
 
   if (g_show_settings_timer > 0.0f)
     g_show_settings_timer -= dt;
+
+  bool mouse_left_down = IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+  float wheel_move = GetMouseWheelMove();
+
+  if (wheel_move != 0) {
+    const Vector2 mouse_pos = GetMousePosition();
+    const Vector2 mouse_world_pos = GetScreenToWorld2D(mouse_pos, g_camera);
+
+    g_camera.zoom = g_camera.zoom + ((wheel_move * 0.125f) * g_camera.zoom);
+    g_camera.offset = mouse_pos;
+    g_camera.target = mouse_world_pos;
+  }
+  if (mouse_left_down) {
+    Vector2 mouse_delta = GetMouseDelta();
+    mouse_delta = (Vector2){.x = -mouse_delta.x / g_camera.zoom, .y = -mouse_delta.y / g_camera.zoom};
+    g_camera.target = (Vector2){
+      .x = g_camera.target.x + mouse_delta.x,
+      .y = g_camera.target.y + mouse_delta.y
+    };
+  }
+  g_camera.zoom = CLAMP(g_camera.zoom, 1e-19, 1e-16);
 }
 
 /* ---------------------------------------------------------------
@@ -352,6 +373,18 @@ int main(int argc, char *argv[])
   ToggleFullscreen();
   SetTargetFPS(60);
 
+  g_camera.target = (Vector2){0.0f, 0.0f};
+  g_camera.offset = (Vector2){(float)screen_width / 2.0f, (float)screen_height / 2.0f};
+  g_camera.rotation = 0.0f;
+  g_camera.zoom = screen_height / (GALAXY_RADIUS * 2.0f);
+
+  /* Drawing textures is much faster than generating circles every */
+  /* frame, so we use a simple circle texture for all particles.   */
+  Image img = GenImageColor(256, 256, BLANK);
+  ImageDrawCircle(&img, 128, 128, 128, WHITE);
+  Texture2D particle_tex = LoadTextureFromImage(img);
+  UnloadImage(img);
+
   queue_init(&payload_queue,  1,      free_payload);
   queue_init(&response_queue, 65536,  free_response);
 
@@ -373,23 +406,23 @@ int main(int argc, char *argv[])
     ClearBackground(BLACK);
 
     /* Draw particles */
+    BeginMode2D(g_camera);
+    Rectangle src = {0, 0, particle_tex.width, particle_tex.height};
     pthread_mutex_lock(&g_particles_mutex);
-    if (g_particles_changed) {
-      for (int i = 0; i < g_num_particles; i++) {
-        int    pid  = g_particle_ids[i];
-        double mass = g_particle_masses[i];
-        float  rad  = particle_radius(mass, pid);
-        Color  c;
-        if (pid == 0) {
-          c = WHITE; /* central black hole */
-        } else {
-          unsigned char hue = (unsigned char)((pid * 37) & 0xFF);
-          c = ColorFromHSV((float)hue / 255.0f * 360.0f, 0.9f, 0.9f);
-        }
-        DrawCircleV(g_screen_positions[i], rad, c);
-      }
+    for (int i = 0; i < g_num_particles; i++) {
+      /* Recomputing radii and colors might be expensive. Could be worth storing per particle. */
+      float r = particle_radius(g_particle_masses[i], g_particle_ids[i]);
+      Rectangle dst = {
+          g_particle_positions[i].x,
+          g_particle_positions[i].y,
+          r * 2.0f,
+          r * 2.0f
+      };
+      Vector2 origin = {r, r}; // Centering texture
+      DrawTexturePro(particle_tex, src, dst, origin, 0.0f, particle_color(g_particle_ids[i]));
     }
     pthread_mutex_unlock(&g_particles_mutex);
+    EndMode2D();
 
     /* HUD */
     DrawText("Press N to start a new simulation", 10, 10, 20, DARKGRAY);
@@ -398,7 +431,7 @@ int main(int argc, char *argv[])
              10, 60, 20, DARKGRAY);
     DrawText(TextFormat("Iterations: %d  (I+/-)", g_num_iterations),
              10, 85, 20, DARKGRAY);
-    DrawText(TextFormat("Space: %.2e m  (S+/-)", g_space_size),
+    DrawText(TextFormat("Zoom: %.2e  (S+/-)", g_camera.zoom),
              10, 110, 20, DARKGRAY);
 
     if (g_show_settings_timer > 0.0f) {
@@ -418,9 +451,11 @@ int main(int argc, char *argv[])
   pthread_join(payload_thread,  NULL);
   pthread_join(response_thread, NULL);
 
+  UnloadTexture(particle_tex);
+
   CloseWindow();
 
-  free(g_screen_positions);
+  free(g_particle_positions);
   free(g_particle_ids);
   free(g_particle_masses);
   pthread_mutex_destroy(&g_particles_mutex);

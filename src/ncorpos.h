@@ -28,9 +28,9 @@ along with "NCorpos @ PCAD". If not, see
  * 1 Myr  = 3.156e13 s
  * 1 Msun = 1.989e30 kg
  * ------------------------------------------------------------------- */
-#define NCORPOS_G           6.674e-11   /* gravitational constant (SI)      */
-#define NCORPOS_DT          0.00031    /* time step: ~1 Myr in seconds     */
-#define NCORPOS_SOFTENING   3.086e18    /* softening: ~100 pc in metres     */
+#define NCORPOS_G           6.674e-11       /* gravitational constant (SI)     */
+#define NCORPOS_DT          3.156e13 / 10.0 /* time step: ~1/10 Myr in seconds */
+#define NCORPOS_SOFTENING   3.086e18        /* softening: ~100 pc in metres    */
 
 /* Bounds used by the galaxy IC generator */
 #define NCORPOS_MIN_PARTICLES   2
@@ -53,13 +53,18 @@ along with "NCorpos @ PCAD". If not, see
 #define GALAXY_BH_MASS      7.958e36   /* 4e6 Msun  — central black hole    */
 #define GALAXY_RADIUS       6.172e20   /* 20 kpc    — truncation radius     */
 
+/* Visual radii */
+#define BLACK_HOLE_RADIUS   (GALAXY_RADIUS / 42.0)
+#define PARTICLE_RADIUS_MIN (BLACK_HOLE_RADIUS / 12.0)
+#define PARTICLE_RADIUS_MAX (BLACK_HOLE_RADIUS / 6.0)
+
 /* ---------------------------------------------------------------
  * Core data types
  * --------------------------------------------------------------- */
 
 /* A single particle in 2-D space */
 typedef struct {
-  int    id;      /* unique integer identifier                     */
+  int    id;     /* unique integer identifier                     */
   double x, y;   /* position  (metres)                            */
   double vx, vy; /* velocity  (m/s)                               */
   double ax, ay; /* acceleration from previous step (Leapfrog)    */
@@ -86,10 +91,6 @@ typedef struct {
   int    num_particles; /* total number of particles                 */
   int    num_iterations;/* how many simulation steps to perform      */
   int    num_workers;   /* how many MPI workers to use               */
-  double space_width;   /* physical width  of the simulation domain  */
-  double space_height;  /* physical height of the simulation domain  */
-  int    screen_width;  /* screen width  in pixels                   */
-  int    screen_height; /* screen height in pixels                   */
   particle_t *particles;/* dynamic array – NOT embedded in the struct*/
 } payload_t;
 

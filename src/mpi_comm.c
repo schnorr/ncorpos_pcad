@@ -29,10 +29,6 @@ static void _send_payload_header(const payload_t *p, int target, int tag)
   MPI_Send(&p->num_particles,  1, MPI_INT,    target, tag, MPI_COMM_WORLD);
   MPI_Send(&p->num_iterations, 1, MPI_INT,    target, tag, MPI_COMM_WORLD);
   MPI_Send(&p->num_workers,    1, MPI_INT,    target, tag, MPI_COMM_WORLD);
-  MPI_Send(&p->space_width,    1, MPI_DOUBLE, target, tag, MPI_COMM_WORLD);
-  MPI_Send(&p->space_height,   1, MPI_DOUBLE, target, tag, MPI_COMM_WORLD);
-  MPI_Send(&p->screen_width,   1, MPI_INT,    target, tag, MPI_COMM_WORLD);
-  MPI_Send(&p->screen_height,  1, MPI_INT,    target, tag, MPI_COMM_WORLD);
 }
 
 static void _recv_payload_header(payload_t *p, int source, int tag)
@@ -41,10 +37,6 @@ static void _recv_payload_header(payload_t *p, int source, int tag)
   MPI_Recv(&p->num_particles,  1, MPI_INT,    source, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
   MPI_Recv(&p->num_iterations, 1, MPI_INT,    source, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
   MPI_Recv(&p->num_workers,    1, MPI_INT,    source, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-  MPI_Recv(&p->space_width,    1, MPI_DOUBLE, source, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-  MPI_Recv(&p->space_height,   1, MPI_DOUBLE, source, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-  MPI_Recv(&p->screen_width,   1, MPI_INT,    source, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-  MPI_Recv(&p->screen_height,  1, MPI_INT,    source, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 }
 
 /* ---------------------------------------------------------------

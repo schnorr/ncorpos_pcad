@@ -200,10 +200,6 @@ static payload_t *build_payload(int argc, char *argv[], int num_workers)
   p->num_particles = num_particles;
   p->num_iterations= num_iterations;
   p->num_workers   = num_workers;
-  p->space_width   = space_size;
-  p->space_height  = space_size;
-  p->screen_width  = 1920; /* logical; textual client doesn't render */
-  p->screen_height = 1080;
 
   p->particles = malloc((size_t)num_particles * sizeof(particle_t));
   if (!p->particles) { perror("malloc"); exit(1); }

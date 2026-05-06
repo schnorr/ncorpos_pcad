@@ -213,9 +213,6 @@ void payload_print(const char *func, const char *msg, const payload_t *p)
   printf("(%d) %s: %s\n", p->generation, func, msg);
   printf("\tparticles=%d  iterations=%d  workers=%d\n",
          p->num_particles, p->num_iterations, p->num_workers);
-  printf("\tspace=(%.3e x %.3e)  screen=(%d x %d)\n",
-         p->space_width, p->space_height,
-         p->screen_width, p->screen_height);
 }
 
 void response_print(const char *func __attribute__((unused)), const char *msg, const response_t *r)
