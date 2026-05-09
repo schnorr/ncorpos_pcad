@@ -21,6 +21,7 @@ Controls:
   P +/-   – increase / decrease particle count
   I +/-   – increase / decrease iteration count
   S +/-   – increase / decrease space scale (1 pixel = N km)
+  C       – cycle color mode: ID → THREADS → MOVEMENT → …
   ESC     – quit
 */
 #include <raylib.h>
@@ -48,6 +49,9 @@ Controls:
  * Utility macros
  * --------------------------------------------------------------- */
 #define CLAMP(v, lo, hi) ((v) < (lo) ? (lo) : (v) > (hi) ? (hi) : (v))
+#define RANDOM   0
+#define THREADS  1
+#define MOVEMENT 2
 
 /* ---------------------------------------------------------------
  * Global state
@@ -59,10 +63,13 @@ static queue_t response_queue = {0};
 
 /* Current particle positions on screen (updated by render_thread) */
 static pthread_mutex_t g_particles_mutex = PTHREAD_MUTEX_INITIALIZER;
-static Vector2 *g_particle_positions = NULL; /* [max_particles] */
-static int     *g_particle_ids      = NULL; /* [max_particles] */
-static double  *g_particle_masses   = NULL; /* [max_particles] */
-static int      g_num_particles     = 0;
+static Vector2 *g_particle_positions   = NULL; /* [max_particles] */
+static int     *g_particle_ids         = NULL; /* [max_particles] */
+static double  *g_particle_masses      = NULL; /* [max_particles] */
+static float   *g_particle_speed       = NULL; /* |v| precomputed, m/s   */
+static float   *g_particle_accel       = NULL; /* |a| precomputed, m/s²  */
+static int     *g_particle_working_ids = NULL; /* [max_particles] */
+static int      g_num_particles        = 0;
 static Camera2D g_camera = {0};
 
 /* Simulation settings (modified only from main/UI thread) */
@@ -70,6 +77,8 @@ static int    g_num_particles_setting = 2500;
 static int    g_num_iterations        = 500;
 static int    g_max_workers           = 1;
 static float  g_show_settings_timer  = 0.0f;
+
+static int    g_color_scheme         = RANDOM;
 
 /* ---------------------------------------------------------------
  * Particle display radius — proportional to mass on a log scale.
@@ -92,19 +101,53 @@ static double particle_radius(double mass, int id)
 }
 
 /* ---------------------------------------------------------------
- * Particle color — proportional to mass on a log scale.
- * 
- * The black hole gets a fixed white color. Other particles are colored
- * based on id.
+ * Particle color from sequential ID.
+ *
+ * Hue: golden angle (137.508°) — provably maximises the minimum
+ *      angular distance between any N hues for any N. No clustering.
+ * Sat: low-discrepancy sequence using 1/φ  (≈ 0.618034)
+ * Val: low-discrepancy sequence using 1/φ² (≈ 0.381966)
+ *
+ * Three decoupled irrational multipliers cover HSV space quasi-uniformly:
+ * nearby IDs differ in hue, saturation, and brightness simultaneously.
  * --------------------------------------------------------------- */
 static Color particle_color(int id)
 {
     if (id == 0)
-      return WHITE; /* big central BH */
+        return WHITE;
 
-    unsigned char hue = (unsigned char)((id * 37) & 0xFF);
-    return ColorFromHSV((float)hue / 255.0f * 360.0f, 0.9f, 0.9f);
+    float hue = fmodf((float)id * 137.508f, 360.0f);
+
+    return ColorFromHSV(hue, 1.0f, 1.0f);
 }
+
+/* ---------------------------------------------------------------
+ * MOVEMENT color mode.
+ *
+ * Hue   = thermal scale on speed: blue (slow, 240°) → red (fast, 0°).
+ *         Every particle reads individually — no sectors.
+ * Sat   = log-scaled acceleration magnitude: particles being pulled
+ *         hard are vivid; coasting ones are pastel.
+ * Value = 1.0 always — full brightness.
+ *
+ * Acceleration log scale: maps [1e-10, 1e-5] m/s² → [0, 1].
+ * Typical galaxy accelerations sit in this range.
+ * --------------------------------------------------------------- */
+static Color particle_color_movement(int id, float speed, float accel)
+{
+    if (id == 0) return WHITE;
+
+    float t_v = fminf(speed / (float)NCORPOS_MAX_SPEED, 1.0f);
+    float hue = (1.0f - t_v) * 240.0f;                            /* blue→red */
+
+    float t_a = (accel > 0.0f)
+                ? fminf(fmaxf((log10f(accel) + 10.0f) / 5.0f, 0.0f), 1.0f)
+                : 0.0f;
+    float sat = 0.4f + 0.6f * t_a;
+
+    return ColorFromHSV(hue, sat, 1.0f);
+}
+
 /* ---------------------------------------------------------------
  * Shutdown helper
  * --------------------------------------------------------------- */
@@ -144,14 +187,21 @@ static void *render_thread_function(void *arg)
     /* Resize position buffer if needed */
     int total = r->first_particle + r->num_particles_slice;
     if (total > g_num_particles) {
-      g_particle_positions = realloc(g_particle_positions,
-                                   (size_t)total * sizeof(Vector2));
-      g_particle_ids     = realloc(g_particle_ids,
-                                   (size_t)total * sizeof(int));
-      g_particle_masses  = realloc(g_particle_masses,
-                                   (size_t)total * sizeof(double));
+      g_particle_positions   = realloc(g_particle_positions,
+                                       (size_t)total * sizeof(Vector2));
+      g_particle_ids         = realloc(g_particle_ids,
+                                       (size_t)total * sizeof(int));
+      g_particle_working_ids = realloc(g_particle_working_ids,
+                                       (size_t)total * sizeof(int));
+      g_particle_masses      = realloc(g_particle_masses,
+                                       (size_t)total * sizeof(double));
+      g_particle_speed       = realloc(g_particle_speed,
+                                       (size_t)total * sizeof(float));
+      g_particle_accel       = realloc(g_particle_accel,
+                                       (size_t)total * sizeof(float));
 
-      if (!g_particle_positions || !g_particle_ids || !g_particle_masses) {
+      if (!g_particle_positions || !g_particle_ids || !g_particle_masses ||
+          !g_particle_speed || !g_particle_accel) {
         perror("realloc failed");
         pthread_mutex_unlock(&g_particles_mutex);
         free_response(r);
@@ -164,10 +214,13 @@ static void *render_thread_function(void *arg)
       int idx = r->first_particle + i;
       particle_t *pt = &r->particles[i];
 
-      g_particle_positions[idx] =
-        (Vector2){.x = pt->x, .y = pt->y};
-      g_particle_ids[idx]    = pt->id;
-      g_particle_masses[idx] = pt->mass;
+
+      g_particle_positions[idx]   = (Vector2){.x = pt->x, .y = pt->y};
+      g_particle_ids[idx]         = pt->id;
+      g_particle_masses[idx]      = pt->mass;
+      g_particle_speed[idx] = sqrtf((float)(pt->vx*pt->vx + pt->vy*pt->vy));
+      g_particle_accel[idx] = sqrtf((float)(pt->ax*pt->ax + pt->ay*pt->ay));
+      g_particle_working_ids[idx] = r->worker_id;
     }
     pthread_mutex_unlock(&g_particles_mutex);
 
@@ -281,6 +334,11 @@ static void handle_input()
     payload_print(__func__, "Enqueueing payload", p);
     queue_enqueue(&payload_queue, p);
     p = NULL;
+  }
+
+  /* C – cycle color mode: RANDOM → THREADS → MOVEMENT → … */
+  if (IsKeyPressed(KEY_C)) {
+    g_color_scheme = (g_color_scheme + 1) % 3;
   }
 
   /* P +/- – particle count */
@@ -419,12 +477,24 @@ int main(int argc, char *argv[])
           r * 2.0f
       };
       Vector2 origin = {r, r}; // Centering texture
-      DrawTexturePro(particle_tex, src, dst, origin, 0.0f, particle_color(g_particle_ids[i]));
+
+      Color col;
+      switch (g_color_scheme) {
+      case THREADS:
+        col = particle_color(g_particle_working_ids[i]); break;
+      case MOVEMENT:
+        col = particle_color_movement(g_particle_ids[i],
+                                      g_particle_speed[i], g_particle_accel[i]); break;
+      case RANDOM: default:
+        col = particle_color(g_particle_ids[i]); break;
+      }
+      DrawTexturePro(particle_tex, src, dst, origin, 0.0f, col);
     }
     pthread_mutex_unlock(&g_particles_mutex);
     EndMode2D();
 
     /* HUD */
+    static const char *COLOR_MODE_NAMES[] = { "ID", "THREADS", "MOVEMENT" };
     DrawText("Press N to start a new simulation", 10, 10, 20, DARKGRAY);
     DrawText(TextFormat("Workers: %d", g_max_workers),       10, 35, 20, DARKGRAY);
     DrawText(TextFormat("Particles: %d  (P+/-)", g_num_particles_setting),
@@ -433,6 +503,8 @@ int main(int argc, char *argv[])
              10, 85, 20, DARKGRAY);
     DrawText(TextFormat("Zoom: %.2e  (S+/-)", g_camera.zoom),
              10, 110, 20, DARKGRAY);
+    DrawText(TextFormat("Color: %s  (C)", COLOR_MODE_NAMES[g_color_scheme]),
+             10, 135, 20, DARKGRAY);
 
     if (g_show_settings_timer > 0.0f) {
       DrawText(TextFormat("Particles: %d", g_num_particles_setting),
@@ -457,7 +529,10 @@ int main(int argc, char *argv[])
 
   free(g_particle_positions);
   free(g_particle_ids);
+  free(g_particle_working_ids);
   free(g_particle_masses);
+  free(g_particle_speed);
+  free(g_particle_accel);
   pthread_mutex_destroy(&g_particles_mutex);
 
   close(connection);
