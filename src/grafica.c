@@ -78,6 +78,7 @@ static int    g_max_workers           = 1;
 static float  g_show_settings_timer  = 0.0f;
 
 static int    g_color_scheme         = RANDOM;
+static int    g_filter_worker        = -1;    /* -1 = show all */
 
 /* ---------------------------------------------------------------
  * Particle display radius — proportional to mass on a log scale.
@@ -308,6 +309,18 @@ static void handle_input()
   if (IsKeyPressed(KEY_C)) {
     g_color_scheme = (g_color_scheme + 1) % 2;
   }
+
+  /* Tab – cycle worker filter: all → worker 0 → worker 1 → … → all */
+  if (IsKeyPressed(KEY_TAB)) {
+    if (!IsKeyDown(KEY_LEFT_SHIFT)) {
+      g_filter_worker = (g_filter_worker + 2) % (g_max_workers + 1) - 1;
+    } else {
+      g_filter_worker = g_filter_worker == -1 ? g_max_workers - 1 : g_filter_worker - 1;
+    }
+  }
+
+  if (IsKeyPressed(KEY_R)) {
+    g_filter_worker = -1;
   }
 
   /* P +/- – particle count */
@@ -437,7 +450,8 @@ int main(int argc, char *argv[])
     Rectangle src = {0, 0, particle_tex.width, particle_tex.height};
     pthread_mutex_lock(&g_particles_mutex);
     for (int i = 0; i < g_num_particles; i++) {
-      /* Recomputing radii and colors might be expensive. Could be worth storing per particle. */
+      if (g_filter_worker != -1 && g_particle_working_ids[i] != g_filter_worker && g_particle_ids[i] != 0)
+        continue;
       float r = particle_radius(g_particle_masses[i], g_particle_ids[i]);
       Rectangle dst = {
           g_particle_positions[i].x,
@@ -473,6 +487,11 @@ int main(int argc, char *argv[])
              10, 110, 20, DARKGRAY);
     DrawText(TextFormat("Color: %s  (C)", COLOR_MODE_NAMES[g_color_scheme]),
              10, 135, 20, DARKGRAY);
+    if (g_filter_worker == -1)
+      DrawText("Filter: all  (Tab to cicle/R to reset)", 10, 160, 20, DARKGRAY);
+    else
+      DrawText(TextFormat("Filter: worker %d  (Tab to cicle/R to reset)", g_filter_worker),
+               10, 160, 20, particle_color(g_filter_worker));
 
     if (g_show_settings_timer > 0.0f) {
       DrawText(TextFormat("Particles: %d", g_num_particles_setting),
