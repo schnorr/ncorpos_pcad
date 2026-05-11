@@ -21,7 +21,7 @@ Controls:
   P +/-   – increase / decrease particle count
   I +/-   – increase / decrease iteration count
   S +/-   – increase / decrease space scale (1 pixel = N km)
-  C       – cycle color mode: ID → THREADS → MOVEMENT → …
+  C       – cycle color mode: ID → THREADS → …
   ESC     – quit
 */
 #include <raylib.h>
@@ -51,7 +51,6 @@ Controls:
 #define CLAMP(v, lo, hi) ((v) < (lo) ? (lo) : (v) > (hi) ? (hi) : (v))
 #define RANDOM   0
 #define THREADS  1
-#define MOVEMENT 2
 
 /* ---------------------------------------------------------------
  * Global state
@@ -113,39 +112,8 @@ static double particle_radius(double mass, int id)
  * --------------------------------------------------------------- */
 static Color particle_color(int id)
 {
-    if (id == 0)
-        return WHITE;
-
     float hue = fmodf((float)id * 137.508f, 360.0f);
-
     return ColorFromHSV(hue, 1.0f, 1.0f);
-}
-
-/* ---------------------------------------------------------------
- * MOVEMENT color mode.
- *
- * Hue   = thermal scale on speed: blue (slow, 240°) → red (fast, 0°).
- *         Every particle reads individually — no sectors.
- * Sat   = log-scaled acceleration magnitude: particles being pulled
- *         hard are vivid; coasting ones are pastel.
- * Value = 1.0 always — full brightness.
- *
- * Acceleration log scale: maps [1e-10, 1e-5] m/s² → [0, 1].
- * Typical galaxy accelerations sit in this range.
- * --------------------------------------------------------------- */
-static Color particle_color_movement(int id, float speed, float accel)
-{
-    if (id == 0) return WHITE;
-
-    float t_v = fminf(speed / (float)NCORPOS_MAX_SPEED, 1.0f);
-    float hue = (1.0f - t_v) * 240.0f;                            /* blue→red */
-
-    float t_a = (accel > 0.0f)
-                ? fminf(fmaxf((log10f(accel) + 10.0f) / 5.0f, 0.0f), 1.0f)
-                : 0.0f;
-    float sat = 0.4f + 0.6f * t_a;
-
-    return ColorFromHSV(hue, sat, 1.0f);
 }
 
 /* ---------------------------------------------------------------
@@ -336,9 +304,10 @@ static void handle_input()
     p = NULL;
   }
 
-  /* C – cycle color mode: RANDOM → THREADS → MOVEMENT → … */
+  /* C – cycle color mode: RANDOM → THREADS → … */
   if (IsKeyPressed(KEY_C)) {
-    g_color_scheme = (g_color_scheme + 1) % 3;
+    g_color_scheme = (g_color_scheme + 1) % 2;
+  }
   }
 
   /* P +/- – particle count */
@@ -479,14 +448,13 @@ int main(int argc, char *argv[])
       Vector2 origin = {r, r}; // Centering texture
 
       Color col;
-      switch (g_color_scheme) {
-      case THREADS:
-        col = particle_color(g_particle_working_ids[i]); break;
-      case MOVEMENT:
-        col = particle_color_movement(g_particle_ids[i],
-                                      g_particle_speed[i], g_particle_accel[i]); break;
-      case RANDOM: default:
-        col = particle_color(g_particle_ids[i]); break;
+      if (g_particle_ids[i] == 0) { // central black hole — always white
+        col = WHITE;
+      } else {
+        switch (g_color_scheme) {
+        case THREADS:  col = particle_color(g_particle_working_ids[i]); break;
+        case RANDOM: default: col = particle_color(g_particle_ids[i]); break;
+        }
       }
       DrawTexturePro(particle_tex, src, dst, origin, 0.0f, col);
     }
@@ -494,7 +462,7 @@ int main(int argc, char *argv[])
     EndMode2D();
 
     /* HUD */
-    static const char *COLOR_MODE_NAMES[] = { "ID", "THREADS", "MOVEMENT" };
+    static const char *COLOR_MODE_NAMES[] = { "ID", "THREADS" };
     DrawText("Press N to start a new simulation", 10, 10, 20, DARKGRAY);
     DrawText(TextFormat("Workers: %d", g_max_workers),       10, 35, 20, DARKGRAY);
     DrawText(TextFormat("Particles: %d  (P+/-)", g_num_particles_setting),
