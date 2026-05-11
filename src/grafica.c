@@ -458,7 +458,7 @@ int main(int argc, char *argv[])
 
   /* Draw loop */
   while (!WindowShouldClose()) {
-    handle_input(screen_width, screen_height);
+    handle_input();
 
     BeginDrawing();
     ClearBackground(BLACK);
