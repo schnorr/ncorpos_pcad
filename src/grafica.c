@@ -22,6 +22,8 @@ Controls:
   I +/-   – increase / decrease iteration count
   S +/-   – increase / decrease space scale (1 pixel = N km)
   C       – cycle color mode: ID → THREADS → …
+  TAB     – cycle worker filter: all → worker 0 → worker 1 → … → all
+  R       – reset worker filter (show all)
   ESC     – quit
 */
 #include <raylib.h>
