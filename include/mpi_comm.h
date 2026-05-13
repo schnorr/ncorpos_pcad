@@ -20,6 +20,7 @@ Plan #1 MPI tag layout:
   NCORPOS_MPI_PAYLOAD_DATA    coordinator -> worker  (subpayload bytes)
   NCORPOS_MPI_RESPONSE_DATA   worker -> coordinator  (packed response)
   NCORPOS_MPI_SHUTDOWN_WORKER coordinator -> worker  (shutdown signal)
+  NCORPOS_MPI_CANCEL          coordinator -> worker  (cancel current job)
 */
 #ifndef __MPI_COMM_H_
 #define __MPI_COMM_H_
@@ -34,12 +35,20 @@ Plan #1 MPI tag layout:
 #define NCORPOS_MPI_PAYLOAD_DATA     1  /* coordinator -> worker: subpayload    */
 #define NCORPOS_MPI_RESPONSE_DATA    2  /* worker -> coordinator: response      */
 #define NCORPOS_MPI_SHUTDOWN_WORKER  3  /* coordinator -> worker: shutdown      */
+#define NCORPOS_MPI_CANCEL           4  /* coordinator -> worker: cancel job    */
 
 /* ---------------------------------------------------------------
  * coordinator -> worker: deliver a sub-payload
  * --------------------------------------------------------------- */
 void          mpi_subpayload_send    (subpayload_t *sub, int target);
 subpayload_t *mpi_subpayload_receive (int source);
+
+/* ---------------------------------------------------------------
+ * coordinator -> all workers: cancel the current job.
+ * Sends NCORPOS_MPI_CANCEL to each rank in [1, num_workers].
+ * Workers will drain the message between iterations and break early.
+ * --------------------------------------------------------------- */
+void mpi_cancel_send(int num_workers);
 
 /* ---------------------------------------------------------------
  * worker -> coordinator: packed response (Plan #1)

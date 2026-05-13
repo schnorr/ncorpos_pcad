@@ -91,6 +91,7 @@ static atomic_int shutdown_requested = 0;
 /* Newest payload waiting to be dispatched */
 static payload_t        *newest_payload       = NULL;
 static atomic_int        latest_generation    = -1;
+static atomic_int        cancel_generation    = -1; /* generation to abort   */
 static pthread_mutex_t   newest_payload_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t    new_payload          = PTHREAD_COND_INITIALIZER;
 
@@ -214,6 +215,17 @@ static void *net_thread_receive_payload(void *arg)
       free_payload(newest_payload);
     newest_payload = p;
     atomic_store(&latest_generation, p->generation);
+
+    /* If a job is already running, tell workers to abort it so the
+     * new generation can be dispatched without waiting for all
+     * remaining iterations to complete. */
+    pthread_mutex_lock(&job_mutex);
+    if (current_job.active) {
+      atomic_store(&cancel_generation, current_job.generation);
+      mpi_cancel_send(total_workers);
+    }
+    pthread_mutex_unlock(&job_mutex);
+
     pthread_cond_signal(&new_payload);
     pthread_mutex_unlock(&newest_payload_mutex);
   }
@@ -334,7 +346,7 @@ static void *compute_dispatch_thread(void *arg)
       clock_gettime(CLOCK_MONOTONIC, &t_start);
 #endif
 
-      ncorpos_step(my_sub, 0.0, 0.0);
+      bool cancelled = ncorpos_step(my_sub, 0.0, 0.0, &cancel_generation);
 
 #if LOG_LEVEL >= LOG_BASIC
       clock_gettime(CLOCK_MONOTONIC, &t_end);
@@ -359,6 +371,10 @@ static void *compute_dispatch_thread(void *arg)
        * updated slice so every rank has the full particle array for
        * the next iteration.  MPI_IN_PLACE avoids aliasing sendbuf
        * into recvbuf.
+       *
+       * NOTE: this must happen BEFORE the cancellation break so that
+       * coordinator and workers stay in lock-step on the collective.
+       * We break AFTER the Allgatherv, mirroring the worker side.
        */
       MPI_Allgatherv(
         MPI_IN_PLACE, 0, MPI_DATATYPE_NULL,
@@ -366,6 +382,15 @@ static void *compute_dispatch_thread(void *arg)
         recvcounts, displs, MPI_BYTE,
         MPI_COMM_WORLD
       );
+
+      /*
+       * Cancellation check: ncorpos_step returns true if it bailed
+       * early, or the cancel flag may have been set after the kernel
+       * returned.  Either way, break after the Allgatherv so the
+       * collective stays in sync with workers.
+       */
+      if (cancelled || atomic_load(&cancel_generation) == my_sub->payload.generation)
+        break;
     }
 
 #if LOG_LEVEL >= LOG_BASIC
@@ -384,6 +409,25 @@ static void *compute_dispatch_thread(void *arg)
     for (int i = 1; i <= total_workers; i++)
       free_subpayload(subs[i]);
     free(subs);
+
+    /* If this job was cancelled, mark it done now so that
+     * mpi_recv_responses_thread does not wait for responses that
+     * will never arrive (workers stopped early too).  Signal
+     * workers_done so the next iteration of this loop can proceed. */
+    bool was_cancelled;
+    pthread_mutex_lock(&job_mutex);
+    was_cancelled = (current_job.active &&
+                     atomic_load(&cancel_generation) == current_job.generation);
+
+    pthread_mutex_unlock(&job_mutex);
+
+    if (was_cancelled) {
+      current_job.active = false;
+      pthread_mutex_lock(&workers_done_mutex);
+      workers_job_done = true;
+      pthread_cond_signal(&workers_done_cond);
+      pthread_mutex_unlock(&workers_done_mutex);
+    }
   }
 
   /*
@@ -447,8 +491,12 @@ static void *mpi_recv_responses_thread(void *arg)
 #endif
 
       if (current_job.responses_received == current_job.responses_expected) {
-        job_done           = true;
-        current_job.active = false;
+        /* Only signal done if the job wasn't already marked inactive
+         * by an early cancellation in compute_dispatch_thread. */
+        if (current_job.active) {
+          job_done           = true;
+          current_job.active = false;
+        }
       }
     } else {
       free_response(r);
@@ -732,7 +780,7 @@ static int main_worker(int argc, char *argv[])
       clock_gettime(CLOCK_MONOTONIC, &t_start);
 #endif
 
-      ncorpos_step(sub, 0.0, 0.0);
+      ncorpos_step(sub, 0.0, 0.0, NULL);
 
 #if LOG_LEVEL >= LOG_BASIC
       clock_gettime(CLOCK_MONOTONIC, &t_end);
@@ -751,6 +799,9 @@ static int main_worker(int argc, char *argv[])
       /*
        * Collective position exchange across all ranks (0..W).
        * MPI_IN_PLACE avoids aliasing sendbuf into recvbuf.
+       *
+       * NOTE: Allgatherv comes BEFORE the cancel check so that
+       * coordinator and workers break at the same point in the loop.
        */
       MPI_Allgatherv(
         MPI_IN_PLACE, 0, MPI_DATATYPE_NULL,
@@ -758,6 +809,25 @@ static int main_worker(int argc, char *argv[])
         recvcounts, displs, MPI_BYTE,
         MPI_COMM_WORLD
       );
+
+      /*
+       * Cancellation check: poll for a NCORPOS_MPI_CANCEL message from
+       * the coordinator.  MPI_Iprobe is non-blocking.  We check HERE —
+       * after Allgatherv — to mirror the coordinator which also breaks
+       * after Allgatherv, keeping the collective in sync.
+       */
+      {
+        int cancel_flag = 0;
+        MPI_Status cancel_status;
+        MPI_Iprobe(0, NCORPOS_MPI_CANCEL, MPI_COMM_WORLD,
+                   &cancel_flag, &cancel_status);
+        if (cancel_flag) {
+          int dummy;
+          MPI_Recv(&dummy, 1, MPI_INT, 0,
+                   NCORPOS_MPI_CANCEL, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+          break;
+        }
+      }
     }
 
     /* Wait for the last async send to complete */
@@ -814,4 +884,3 @@ int main(int argc, char *argv[])
   MPI_Finalize();
   return 0;
 }
-

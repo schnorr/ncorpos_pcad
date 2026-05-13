@@ -301,6 +301,12 @@ static void handle_input()
 
   /* N – send a new simulation request */
   if (IsKeyPressed(KEY_N)) {
+    queue_clear(&response_queue);           // ← discard buffered responses
+
+    pthread_mutex_lock(&g_particles_mutex); // ← wipe screen immediately
+    g_num_particles = 0;
+    pthread_mutex_unlock(&g_particles_mutex);
+
     payload_t *p = build_payload();
     payload_print(__func__, "Enqueueing payload", p);
     queue_enqueue(&payload_queue, p);

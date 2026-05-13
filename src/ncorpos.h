@@ -148,12 +148,23 @@ subpayload_t **discretize_payload (payload_t *payload,
                                    int        num_workers,
                                    int       *length);
 
+#include <stdatomic.h>
+
 /* Advance one simulation step for the particles in sub's slice.
  * All particles in sub->payload.particles are read (for force
  * computation); only the slice [first_particle, last_particle)
  * is updated.  dt and softening use the module defaults when 0
- * is passed. */
-void ncorpos_step (subpayload_t *sub, double dt, double softening);
+ * is passed.
+ *
+ * cancel_gen: if non-NULL, the kernel checks this atomic on every
+ * outer-loop iteration.  If its value equals sub->payload.generation
+ * the kernel returns true immediately (cancelled) so the caller can
+ * discard the job without waiting for O(N²) work to finish.
+ * Pass NULL to disable cancellation (workers use the MPI cancel path).
+ *
+ * Returns true if the step was cancelled, false if it completed. */
+bool ncorpos_step(subpayload_t *sub, double dt, double softening,
+                  const atomic_int *cancel_gen);
 
 /* Build a response_t snapshot from the current state of sub's slice. */
 response_t *create_response_for_subpayload (subpayload_t *sub,

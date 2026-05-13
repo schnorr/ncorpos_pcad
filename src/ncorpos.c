@@ -113,15 +113,17 @@ subpayload_t **discretize_payload(payload_t *payload,
  * [sub->first_particle, sub->last_particle).
  * All particles are read for the gravitational force computation.
  * --------------------------------------------------------------- */
-void ncorpos_step(subpayload_t *sub, double dt, double softening)
+bool ncorpos_step(subpayload_t *sub, double dt, double softening,
+                  const atomic_int *cancel_gen)
 {
-  if (!sub) return;
+  if (!sub) return false;
   if (dt        <= 0.0) dt        = NCORPOS_DT;
   if (softening <= 0.0) softening = NCORPOS_SOFTENING;
 
   particle_t *particles = sub->payload.particles;
   int         N         = sub->payload.num_particles;
   double      half_dt   = dt * 0.5;
+  int         my_gen    = sub->payload.generation;
 
   /* Step 1: half-kick with stored (old) accelerations */
   for (int i = sub->first_particle; i < sub->last_particle; i++) {
@@ -137,8 +139,17 @@ void ncorpos_step(subpayload_t *sub, double dt, double softening)
     particles[i].y += particles[i].vy * dt;
   }
 
-  /* Steps 3+4+5: recompute accelerations, second half-kick, store */
+  /* Steps 3+4+5: recompute accelerations, second half-kick, store.
+   *
+   * This is the O(N²) hot loop.  We check for cancellation once per
+   * outer particle so that a new simulation can preempt the current
+   * one without waiting for the full kernel to finish.  The particle
+   * state is left partially updated, but that is fine — the entire
+   * job is being discarded. */
   for (int i = sub->first_particle; i < sub->last_particle; i++) {
+    if (cancel_gen && atomic_load(cancel_gen) == my_gen)
+      return true; /* cancelled — caller should discard this job */
+
     if (particles[i].id == 0) continue; /* BH stays fixed at origin */
     double ax = 0.0, ay = 0.0;
 
@@ -162,6 +173,7 @@ void ncorpos_step(subpayload_t *sub, double dt, double softening)
     particles[i].ax = ax;
     particles[i].ay = ay;
   }
+  return false; /* completed normally */
 }
 
 /* ---------------------------------------------------------------

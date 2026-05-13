@@ -190,3 +190,20 @@ response_t *mpi_response_receive_any(void)
   free(buf);
   return r;
 }
+
+/* ---------------------------------------------------------------
+ * mpi_cancel_send  –  broadcast a cancel signal to all workers.
+ *
+ * Sends a zero-byte NCORPOS_MPI_CANCEL message to each worker
+ * rank [1..num_workers].  Workers poll for this tag with
+ * MPI_Iprobe between iterations and break out of their loop
+ * upon receipt, keeping the collective in sync with the
+ * coordinator which also breaks at the same inter-iteration point.
+ * --------------------------------------------------------------- */
+void mpi_cancel_send(int num_workers)
+{
+  int dummy = 0;
+  for (int i = 1; i <= num_workers; i++)
+    MPI_Send(&dummy, 1, MPI_INT, i,
+             NCORPOS_MPI_CANCEL, MPI_COMM_WORLD);
+}
