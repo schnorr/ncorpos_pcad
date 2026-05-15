@@ -339,9 +339,10 @@ static void handle_input()
       g_num_particles_setting += (int)change;
     if (IsKeyDown(KEY_MINUS))
       g_num_particles_setting -= (int)change;
-    g_num_particles_setting = (int)CLAMP(g_num_particles_setting,
-                                         NCORPOS_MIN_PARTICLES,
-                                         NCORPOS_MAX_PARTICLES);
+    g_num_particles_setting = (int)((g_num_particles_setting < NCORPOS_MIN_PARTICLES) ? NCORPOS_MIN_PARTICLES : g_num_particles_setting);
+      /* CLAMP(g_num_particles_setting, */
+      /*                                    NCORPOS_MIN_PARTICLES, */
+      /*                                    NCORPOS_MAX_PARTICLES); */
     g_show_settings_timer = 2.0f;
   }
 
