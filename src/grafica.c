@@ -19,7 +19,6 @@ Thread model:
 Controls:
   N       – start a new simulation with current settings
   P +/-   – increase / decrease particle count
-  I +/-   – increase / decrease iteration count
   S +/-   – increase / decrease space scale (1 pixel = N km)
   C       – cycle color mode: ID → THREADS → …
   TAB     – cycle worker filter: all → worker 0 → worker 1 → … → all
@@ -75,7 +74,6 @@ static Camera2D g_camera = {0};
 
 /* Simulation settings (modified only from main/UI thread) */
 static int    g_num_particles_setting = 2500;
-static int    g_num_iterations        = 500;
 static int    g_max_workers           = 1;
 static float  g_show_settings_timer  = 0.0f;
 
@@ -224,8 +222,8 @@ static void *net_thread_send_payload(void *arg)
         free_payload(p);
         pthread_exit(NULL);
       }
-      printf("(%d) %s: payload sent (%d particles, %d iters).\n",
-             p->generation, __func__, p->num_particles, p->num_iterations);
+      printf("(%d) %s: payload sent (%d particles).\n",
+             p->generation, __func__, p->num_particles);
     }
     free_payload(p);
   }
@@ -281,7 +279,6 @@ static payload_t *build_payload()
   static int generation = 0;
   p->generation    = ++generation;
   p->num_particles = g_num_particles_setting;
-  p->num_iterations= g_num_iterations;
   p->num_workers   = g_max_workers;
 
   p->particles = malloc((size_t)p->num_particles * sizeof(particle_t));
@@ -343,18 +340,6 @@ static void handle_input()
       /* CLAMP(g_num_particles_setting, */
       /*                                    NCORPOS_MIN_PARTICLES, */
       /*                                    NCORPOS_MAX_PARTICLES); */
-    g_show_settings_timer = 2.0f;
-  }
-
-  /* I +/- – iteration count */
-  if (IsKeyDown(KEY_I)) {
-    float change = (float)g_num_iterations * dt;
-    if (change < 1.0f) change = 1.0f;
-    if (IsKeyDown(KEY_EQUAL))
-      g_num_iterations += (int)change;
-    if (IsKeyDown(KEY_MINUS))
-      g_num_iterations -= (int)change;
-    g_num_iterations = (int)CLAMP(g_num_iterations, 1, 1000000);
     g_show_settings_timer = 2.0f;
   }
 
@@ -490,23 +475,19 @@ int main(int argc, char *argv[])
     DrawText(TextFormat("Workers: %d", g_max_workers),       10, 35, 20, DARKGRAY);
     DrawText(TextFormat("Particles: %d  (P+/-)", g_num_particles_setting),
              10, 60, 20, DARKGRAY);
-    DrawText(TextFormat("Iterations: %d  (I+/-)", g_num_iterations),
-             10, 85, 20, DARKGRAY);
     DrawText(TextFormat("Zoom: %.2e  (S+/-)", g_camera.zoom),
-             10, 110, 20, DARKGRAY);
+             10, 85, 20, DARKGRAY);
     DrawText(TextFormat("Color: %s  (C)", COLOR_MODE_NAMES[g_color_scheme]),
-             10, 135, 20, DARKGRAY);
+             10, 110, 20, DARKGRAY);
     if (g_filter_worker == -1)
-      DrawText("Filter: all  (Tab to cicle/R to reset)", 10, 160, 20, DARKGRAY);
+      DrawText("Filter: all  (Tab to cicle/R to reset)", 10, 135, 20, DARKGRAY);
     else
       DrawText(TextFormat("Filter: worker %d  (Tab to cicle/R to reset)", g_filter_worker),
-               10, 160, 20, particle_color(g_filter_worker));
+               10, 135, 20, particle_color(g_filter_worker));
 
     if (g_show_settings_timer > 0.0f) {
       DrawText(TextFormat("Particles: %d", g_num_particles_setting),
-               screen_width / 4, screen_height / 2 - 30, 60, WHITE);
-      DrawText(TextFormat("Iterations: %d", g_num_iterations),
-               screen_width / 4, screen_height / 2 + 30, 60, WHITE);
+               screen_width / 4, screen_height / 2, 60, WHITE);
     }
 
     EndDrawing();

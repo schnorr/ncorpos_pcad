@@ -52,6 +52,7 @@ Key simplifications vs Plan #1
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -282,8 +283,8 @@ static void *compute_dispatch_thread(void *arg)
     fprintf(coordinator_log, "[DISCRETIZED]: %.9f\n",
             timespec_to_double(
               timespec_diff(payload_received_time, payload_discretized_time)));
-    /* Total responses = rank 0 (direct) + workers (MPI) */
-    expected_responses      = needed * payload->num_iterations;
+    /* Simulation runs until cancelled; response count is unbounded */
+    expected_responses      = 0;
     responses_received_count = 0;
     responses_sent_count     = 0;
 #endif
@@ -293,8 +294,9 @@ static void *compute_dispatch_thread(void *arg)
     pthread_mutex_lock(&job_mutex);
     current_job.generation         = payload->generation;
     current_job.num_workers        = needed;
-    /* Only ranks 1..W send responses via MPI */
-    current_job.responses_expected = total_workers * payload->num_iterations;
+    /* Simulation runs until cancelled; completion is signalled only via
+     * cancellation, not by counting responses. */
+    current_job.responses_expected = INT_MAX;
     current_job.responses_received = 0;
     current_job.active             = true;
     pthread_mutex_unlock(&job_mutex);
@@ -313,9 +315,8 @@ static void *compute_dispatch_thread(void *arg)
     payload = NULL;
 
     /* 7. Run rank 0's compute loop */
-    subpayload_t *my_sub  = subs[0];
-    int N         = my_sub->payload.num_particles;
-    int num_iters = my_sub->payload.num_iterations;
+    subpayload_t *my_sub = subs[0];
+    int N                = my_sub->payload.num_particles;
 
     /*
      * Build Allgatherv displacement arrays using the same formula as
@@ -341,7 +342,8 @@ static void *compute_dispatch_thread(void *arg)
     struct timespec t_start, t_end;
 #endif
 
-    for (int iter = 0; iter < num_iters; iter++) {
+    int iter = 0;
+    for (; ; iter++) {
 #if LOG_LEVEL >= LOG_BASIC
       clock_gettime(CLOCK_MONOTONIC, &t_start);
 #endif
@@ -398,7 +400,7 @@ static void *compute_dispatch_thread(void *arg)
             "[COORD_PAYLOAD_%d]: %.9f  iters=%d  slice=%d\n",
             my_sub->payload.generation,
             timespec_to_double(iter_total),
-            num_iters,
+            iter,
             my_sub->last_particle - my_sub->first_particle);
     fflush(coordinator_log);
 #endif
@@ -737,7 +739,6 @@ static int main_worker(int argc, char *argv[])
     subpayload_t *sub = mpi_subpayload_receive(0);
 
     int N          = sub->payload.num_particles;
-    int num_iters  = sub->payload.num_iterations;
     int first      = sub->first_particle;
     int last       = sub->last_particle;
     int slice_size = last - first;
@@ -768,7 +769,8 @@ static int main_worker(int argc, char *argv[])
     MPI_Request pending_req = MPI_REQUEST_NULL;
     char *pending_buf       = NULL;
 
-    for (int iter = 0; iter < num_iters; iter++) {
+    int iter = 0;
+    for (; ; iter++) {
       /* Wait for previous async send before overwriting anything */
       if (pending_buf != NULL) {
         MPI_Wait(&pending_req, MPI_STATUS_IGNORE);
@@ -841,7 +843,7 @@ static int main_worker(int argc, char *argv[])
     fprintf(worker_log, "[WORKER_%d_PAYLOAD_%d]: %.9f  iters=%d  slice=%d\n",
             rank, sub->payload.generation,
             timespec_to_double(iter_total),
-            num_iters, slice_size);
+            iter, slice_size);
     fflush(worker_log);
 #endif
 
