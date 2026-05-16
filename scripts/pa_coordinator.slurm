@@ -55,7 +55,7 @@ mpirun --version
 mpirun \
     --mca oob_tcp_if_include 192.168.30.0/24 \
     --mca btl_tcp_if_include 192.168.30.0/24 \
-    --np ${SLURM_JOB_NUM_NODES} \
+    --np 144 \
     --hostfile $HOSTFILE \
     ${NCORPOSDIR}/bin/coordinator \
     9191
