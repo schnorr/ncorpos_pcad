@@ -23,6 +23,8 @@ Controls:
   C       – cycle color mode: ID → THREADS → …
   TAB     – cycle worker filter: all → worker 0 → worker 1 → … → all
   R       – reset worker filter (show all)
+  H       – toggle HUD visibility
+  B       – toggle background (black/white)
   ESC     – quit
 */
 #include <raylib.h>
@@ -73,12 +75,14 @@ static int      g_num_particles        = 0;
 static Camera2D g_camera = {0};
 
 /* Simulation settings (modified only from main/UI thread) */
-static int    g_num_particles_setting = 2500;
+static int    g_num_particles_setting = 15000;
 static int    g_max_workers           = 1;
 static float  g_show_settings_timer  = 0.0f;
 
 static int    g_color_scheme         = RANDOM;
 static int    g_filter_worker        = -1;    /* -1 = show all */
+static bool   g_hud_visible          = true;
+static bool   g_invert_colors        = false; /* B: white bg + black BH */
 
 /* ---------------------------------------------------------------
  * Particle display radius — proportional to mass on a log scale.
@@ -328,6 +332,16 @@ static void handle_input()
     g_filter_worker = -1;
   }
 
+  /* H – toggle HUD visibility */
+  if (IsKeyPressed(KEY_H)) {
+    g_hud_visible = !g_hud_visible;
+  }
+
+  /* B – toggle background: black bg + white BH <-> white bg + black BH */
+  if (IsKeyPressed(KEY_B)) {
+    g_invert_colors = !g_invert_colors;
+  }
+
   /* P +/- – particle count */
   if (IsKeyDown(KEY_P)) {
     float change = (float)g_num_particles_setting * dt;
@@ -437,7 +451,7 @@ int main(int argc, char *argv[])
     handle_input();
 
     BeginDrawing();
-    ClearBackground(BLACK);
+    ClearBackground(g_invert_colors ? WHITE : BLACK);
 
     /* Draw particles */
     BeginMode2D(g_camera);
@@ -456,8 +470,8 @@ int main(int argc, char *argv[])
       Vector2 origin = {r, r}; // Centering texture
 
       Color col;
-      if (g_particle_ids[i] == 0) { // central black hole — always white
-        col = WHITE;
+      if (g_particle_ids[i] == 0) { // central black hole — contrasts with bg
+        col = g_invert_colors ? BLACK : WHITE;
       } else {
         switch (g_color_scheme) {
         case THREADS:  col = particle_color(g_particle_working_ids[i]); break;
@@ -470,24 +484,27 @@ int main(int argc, char *argv[])
     EndMode2D();
 
     /* HUD */
-    static const char *COLOR_MODE_NAMES[] = { "ID", "THREADS" };
-    DrawText("Press N to start a new simulation", 10, 10, 20, DARKGRAY);
-    DrawText(TextFormat("Workers: %d", g_max_workers),       10, 35, 20, DARKGRAY);
-    DrawText(TextFormat("Particles: %d  (P+/-)", g_num_particles_setting),
-             10, 60, 20, DARKGRAY);
-    DrawText(TextFormat("Zoom: %.2e  (S+/-)", g_camera.zoom),
-             10, 85, 20, DARKGRAY);
-    DrawText(TextFormat("Color: %s  (C)", COLOR_MODE_NAMES[g_color_scheme]),
-             10, 110, 20, DARKGRAY);
-    if (g_filter_worker == -1)
-      DrawText("Filter: all  (Tab to cicle/R to reset)", 10, 135, 20, DARKGRAY);
-    else
-      DrawText(TextFormat("Filter: worker %d  (Tab to cicle/R to reset)", g_filter_worker),
-               10, 135, 20, particle_color(g_filter_worker));
+    if (g_hud_visible) {
+      static const char *COLOR_MODE_NAMES[] = { "ID", "THREADS" };
+      DrawText("Press N to start a new simulation", 10, 10, 20, DARKGRAY);
+      DrawText(TextFormat("Workers: %d", g_max_workers),       10, 35, 20, DARKGRAY);
+      DrawText(TextFormat("Particles: %d  (P+/-)", g_num_particles_setting),
+               10, 60, 20, DARKGRAY);
+      DrawText(TextFormat("Zoom: %.2e  (S+/-)", g_camera.zoom),
+               10, 85, 20, DARKGRAY);
+      DrawText(TextFormat("Color: %s  (C)", COLOR_MODE_NAMES[g_color_scheme]),
+               10, 110, 20, DARKGRAY);
+      if (g_filter_worker == -1)
+        DrawText("Filter: all  (Tab to cicle/R to reset)", 10, 135, 20, DARKGRAY);
+      else
+        DrawText(TextFormat("Filter: worker %d  (Tab to cicle/R to reset)", g_filter_worker),
+                 10, 135, 20, particle_color(g_filter_worker));
 
-    if (g_show_settings_timer > 0.0f) {
-      DrawText(TextFormat("Particles: %d", g_num_particles_setting),
-               screen_width / 4, screen_height / 2, 60, WHITE);
+      if (g_show_settings_timer > 0.0f) {
+        DrawText(TextFormat("Particles: %d", g_num_particles_setting),
+                 screen_width / 4, screen_height / 2, 60,
+                 g_invert_colors ? BLACK : WHITE);
+      }
     }
 
     EndDrawing();
